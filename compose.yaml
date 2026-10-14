@@ -1,0 +1,50 @@
+services:
+  app:
+    image: cabv:phase1c
+    build: .
+    environment:
+      HTTP_ADDR: 0.0.0.0:8080
+      COOKIE_SECURE: "false"
+      RESOURCE_DIR: /app/resources
+      RESOURCE_QUOTA_BYTES: "104857600"
+      DATABASE_URL: postgres://cabv:cabv_dev_only@db:5432/cabv?sslmode=disable
+    ports:
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:8080:8080"
+    volumes:
+      - resource_data:/app/resources
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+  migrate:
+    image: cabv:phase1c
+    build: .
+    command: ["cabv-migrate", "up"]
+    environment:
+      DATABASE_URL: postgres://cabv:cabv_dev_only@db:5432/cabv?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: cabv
+      POSTGRES_PASSWORD: cabv_dev_only
+      POSTGRES_DB: cabv
+    ports:
+      - "127.0.0.1:${DB_PORT:-55433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cabv -d cabv"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  postgres_data:
+  resource_data:
