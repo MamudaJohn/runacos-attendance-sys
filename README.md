@@ -7,6 +7,17 @@ to relaying remain unvalidated; accepted check-ins still await lecturer review.
 
 For the lecturer laptop / Android Chrome test, follow [the HTTPS test guide](docs/PHONE_HTTPS_TEST.md).
 
+For Render deployment use [.env.render.example](.env.render.example), replacing
+its placeholders in the web service's Environment page. The separate
+[.env.example](.env.example) is for native local development. Render runs the
+Dockerfile with dashboard environment variables; it does not apply the local
+Compose configuration or automatically load a local .env file. Only DATABASE_URL
+configures the application database; copied connection-note labels such as
+Internal_Database_url, Password, or hostname do not configure it. An explicit
+Render RESOURCE_DIR overrides the image's default and must match the prepared
+/app/resources directory. Leave Docker Command blank so storage initialization
+runs, and use cabv-migrate up as the pre-deploy command.
+
 ## Docker package
 
 With Docker Desktop running Linux containers, start the complete local stack:
@@ -19,6 +30,11 @@ Open http://127.0.0.1:8080. Compose waits for PostgreSQL, runs the versioned
 migration command, then starts the non-root server container and checks readiness.
 The `cabv:phase2a` image contains server, migration, and explicit demo-seed binaries plus SQL files;
 the templates, CSS and JavaScript are embedded. Build tools and local files are excluded.
+The image defaults `RESOURCE_DIR` to `/app/resources`, matching the directory its
+startup command prepares for the restricted `cabv` user. On Render, use the same
+value and mount persistent upload storage at `/app/resources`; leave Docker Command
+blank so directory initialization runs. The native Go server's separate default
+remains `.local/resources`.
 PostgreSQL is exposed on loopback port 55433 to avoid conflicting with an existing
 local database. Set `DB_PORT` to override the host port. The current image is linux/amd64.
 

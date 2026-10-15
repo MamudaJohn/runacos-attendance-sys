@@ -17,5 +17,6 @@ COPY --from=build /out/ /usr/local/bin/
 COPY migrations/*.sql ./migrations/
 USER root
 ENV HTTP_ADDR=0.0.0.0:8080
+ENV RESOURCE_DIR=/app/resources
 EXPOSE 8080
 CMD ["/bin/sh", "-c", "mkdir -p /app/resources && chown cabv:cabv /app/resources && chmod 700 /app/resources && exec su -p -s /bin/sh cabv -c 'exec cabv-server'"]
