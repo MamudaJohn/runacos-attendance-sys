@@ -25,6 +25,9 @@ type attendanceInput struct {
 	Email           string `json:"email"`
 	Decision        string `json:"decision"`
 	Reason          string `json:"reason"`
+	CaptureMethod   string `json:"capture_method"`
+	EvidenceID      string `json:"evidence_id"`
+	IdentityProofID string `json:"identity_proof_id"`
 }
 
 func attendanceAPI(r *http.Request) bool { return strings.HasPrefix(r.URL.Path, "/api/v1/") }
@@ -71,6 +74,9 @@ func (a *application) attendanceForm(w http.ResponseWriter, r *http.Request, tok
 	case strings.HasSuffix(r.URL.Path, "/verify"):
 		allowed["token"] = true
 		allowed["nonce"] = true
+		allowed["capture_method"] = true
+		allowed["evidence_id"] = true
+		allowed["identity_proof_id"] = true
 	case strings.HasSuffix(r.URL.Path, "/reviews"):
 		allowed["email"] = true
 		allowed["decision"] = true
@@ -89,6 +95,9 @@ func (a *application) attendanceForm(w http.ResponseWriter, r *http.Request, tok
 		return false
 	}
 	r.PostForm = url.Values{"course_id": {input.CourseID}, "room_id": {input.RoomID}, "title": {input.Title}, "duration_minutes": {strconv.Itoa(input.DurationMinutes)}, "token": {input.Token}, "nonce": {input.Nonce}, "email": {input.Email}, "decision": {input.Decision}, "reason": {input.Reason}}
+	r.PostForm.Set("capture_method", input.CaptureMethod)
+	r.PostForm.Set("evidence_id", input.EvidenceID)
+	r.PostForm.Set("identity_proof_id", input.IdentityProofID)
 	return true
 }
 func attendanceDecodeError(w http.ResponseWriter, err error) {
@@ -115,16 +124,17 @@ func attendanceError(w http.ResponseWriter, r *http.Request, err error) {
 }
 func attendanceSessionJSON(s store.AttendanceSession) any {
 	return struct {
-		ID              string `json:"id"`
-		CourseID        string `json:"course_id"`
-		RoomID          string `json:"room_id"`
-		Title           string `json:"title"`
-		Status          string `json:"status"`
-		DurationMinutes int    `json:"duration_minutes"`
-		StartsAt        any    `json:"starts_at"`
-		EndsAt          any    `json:"ends_at"`
-		PolicyVersion   string `json:"policy_version"`
-	}{s.ID, s.CourseID, s.RoomID, s.Title, s.Status, s.DurationMinutes, nullableAttendanceTime(s.StartsAt), nullableAttendanceTime(s.EndsAt), s.PolicyVersion}
+		ID               string `json:"id"`
+		CourseID         string `json:"course_id"`
+		RoomID           string `json:"room_id"`
+		Title            string `json:"title"`
+		Status           string `json:"status"`
+		DurationMinutes  int    `json:"duration_minutes"`
+		StartsAt         any    `json:"starts_at"`
+		EndsAt           any    `json:"ends_at"`
+		PolicyVersion    string `json:"policy_version"`
+		IdentityRequired bool   `json:"identity_required"`
+	}{s.ID, s.CourseID, s.RoomID, s.Title, s.Status, s.DurationMinutes, nullableAttendanceTime(s.StartsAt), nullableAttendanceTime(s.EndsAt), s.PolicyVersion, s.IdentityRequired}
 }
 func nullableAttendanceTime(t interface{ IsZero() bool }) any {
 	if t.IsZero() {
@@ -158,7 +168,7 @@ func (a *application) attendanceView(w http.ResponseWriter, r *http.Request, use
 		attendanceError(w, r, err)
 		return view{}, false
 	}
-	data := view{Title: session.Title, User: &user, CSRF: auth.CSRF(token), AttendanceSession: &session, CanManageAttendance: manager}
+	data := view{Title: session.Title, User: &user, CSRF: auth.CSRF(token), AttendanceSession: &session, CanManageAttendance: manager, IdentityEnabled: a.Identity != nil || session.IdentityRequired}
 	if manager {
 		results, err := a.Store.AttendanceResults(r.Context(), user, id)
 		if err != nil {
@@ -228,6 +238,12 @@ func attendanceReasonLabel(reason string) string {
 		return "The lecturer has recorded a manual decision."
 	case "duplicate":
 		return "Your existing attendance record is retained."
+	case "identity_required":
+		return "Confirm with your registered phone authenticator before submitting attendance."
+	case "identity_rejected":
+		return "Phone confirmation was invalid, expired or used. Start a fresh check-in."
+	case "evidence_invalid":
+		return "Captured evidence was invalid, expired or used. Capture it again."
 	}
 	return "The request could not be accepted. Contact your lecturer."
 }
@@ -257,7 +273,7 @@ func (a *application) createAttendance(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Enter a title and duration from 1 to 180 minutes", 400)
 		return
 	}
-	session, err := a.Store.CreateAttendanceSession(r.Context(), user, r.PostForm.Get("course_id"), r.PostForm.Get("room_id"), title, minutes)
+	session, err := a.Store.CreateAttendanceSession(r.Context(), user, r.PostForm.Get("course_id"), r.PostForm.Get("room_id"), title, minutes, a.Identity != nil)
 	if err != nil {
 		attendanceError(w, r, err)
 		return
@@ -279,7 +295,7 @@ func (a *application) attendanceMutation(w http.ResponseWriter, r *http.Request,
 	id := r.PathValue("id")
 	var err error
 	if open {
-		err = a.Store.OpenAttendanceSession(r.Context(), user, id)
+		err = a.Store.OpenAttendanceSession(r.Context(), user, id, a.Identity != nil)
 	} else {
 		err = a.Store.CloseAttendanceSession(r.Context(), user, id)
 	}
@@ -313,13 +329,19 @@ func (a *application) issueChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	challenge, err := a.Store.IssueAttendanceChallenge(r.Context(), user, id)
+	challenge, err := a.Store.IssueAttendanceChallenge(r.Context(), user, id, a.Identity != nil)
+	if err != nil {
+		attendanceError(w, r, err)
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{"v": 1, "session_id": id, "token": challenge.Token, "expires_at": challenge.ExpiresAt})
+	qr, err := qrDataPNG(string(payload))
 	if err != nil {
 		attendanceError(w, r, err)
 		return
 	}
 	if attendanceAPI(r) {
-		writeAttendanceJSON(w, 200, map[string]any{"token": challenge.Token, "generation": challenge.Generation, "expires_at": challenge.ExpiresAt})
+		writeAttendanceJSON(w, 200, map[string]any{"token": challenge.Token, "generation": challenge.Generation, "expires_at": challenge.ExpiresAt, "qr_image": qr, "qr_payload": string(payload)})
 		return
 	}
 	data, ok := a.attendanceView(w, r, user, token, id)
@@ -327,6 +349,7 @@ func (a *application) issueChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.Challenge = &challenge
+	data.ChallengeQR = qr
 	a.render(w, 200, "attendance.html", data)
 }
 func (a *application) issueNonce(w http.ResponseWriter, r *http.Request) {
@@ -379,7 +402,14 @@ func (a *application) verifyAttendance(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Enter a valid challenge and fresh check-in nonce", 400)
 		return
 	}
-	decision, err := a.Store.VerifyAttendance(r.Context(), user, id, challenge, nonce)
+	rpID := ""
+	if a.Identity != nil {
+		rpID = a.Identity.RPID()
+	}
+	decision, err := a.Store.VerifyAttendanceWithEvidence(r.Context(), user, id, challenge, nonce, store.AttendanceSubmission{
+		CaptureMethod: r.PostForm.Get("capture_method"), EvidenceID: r.PostForm.Get("evidence_id"), IdentityProofID: r.PostForm.Get("identity_proof_id"), RequireIdentity: a.Identity != nil,
+		ExpectedRPID: rpID,
+	})
 	if err != nil {
 		attendanceError(w, r, err)
 		return

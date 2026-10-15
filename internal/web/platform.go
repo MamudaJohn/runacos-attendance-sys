@@ -34,6 +34,8 @@ type view struct {
 	AttendanceDecision          *store.AttendanceDecision
 	CanManageAttendance         bool
 	CanCheckIn                  bool
+	IdentityEnabled             bool
+	ChallengeQR                 string
 }
 
 func (a *application) render(w http.ResponseWriter, code int, name string, data view) {

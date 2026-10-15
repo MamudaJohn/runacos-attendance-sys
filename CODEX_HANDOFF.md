@@ -4,7 +4,7 @@
 **Track:** A — Web 1.0 prototype  
 **Handoff date:** 2026-10-14  
 **Audience:** OpenAI Codex in VS Code / project developers  
-**Status:** Phase 0 and Phase 1A/1B/1C classroom workflows implemented and locally verified on 2026-10-14. Attendance validates prototype tokens and records lecturer review; acoustic decoding and physical-presence validation remain planned/experimental.
+**Status:** Phase 0 and Phase 1A/1B/1C plus the Phase 2A experimental acoustic/QR/sensor/WebAuthn implementation are present on 2026-10-14. Automated software verification passes; real-phone sensor/biometric, physical BLE, room-boundary and relay validation remain outstanding. Accepted challenges remain pending lecturer review. Earlier checkpoints below record their historical state.
 
 > **Truth convention:** **[CONFIRMED]** = explicitly established in the project conversation. **[RECOMMENDED]** = proposed engineering decision, not yet approved or implemented. **[EXPERIMENTAL]** = hypothesis requiring measurements. **[UNKNOWN]** = not evidenced. **[FUTURE]** = later-stage scope.
 >
@@ -290,6 +290,69 @@ testing remain unverified. Software validation does not establish physical prese
 | Hosted deployment | **[PLANNED: not verified]** | No public hosted service or hosted CI run |
 
 **Known bugs:** **None currently confirmed by the recorded tests.** No issue tracker exists. Limitations and pending validation are recorded above; anticipated risks in §11 are not evidence of reproduced defects.
+
+### Phase 2A experimental implementation checkpoint (2026-10-14)
+
+**[IMPLEMENTED]** Browser BFSK transmission and streaming AudioWorklet microphone
+reception: audible 2.5/3.5 kHz plus experimental near-ultrasonic 17.5/18.5 kHz. A
+7.24-second frame carries the existing unpredictable 256-bit challenge, synchronization,
+version/profile and CRC32. Explicit gestures start playback, gain defaults to .04 and
+caps at .15. Reception requests echo/noise/gain processing off, reports actual settings,
+mutes output, stops after two minutes, and stops tracks/contexts on exit. No audio is uploaded.
+
+**[IMPLEMENTED]** Manager-only one-response QR generation and student camera decoding
+(native BarcodeDetector or local jsQR fallback), explicit GPS selection, a browser BLE
+GATT receiver, and a separate audible chirp with eight normalized spectral measurements.
+Room references compare spectral cosine distance and optional GPS distance/accuracy in
+shadow mode. A fresh, owned, one-use evidence ID links to an attempt transactionally.
+Twenty evidence captures per student/session bound storage. Seven-day optional observation
+retention is enforced at startup/hourly; audit comparisons remain. Room reference data
+persists until replaced. See docs/SENSOR_EVIDENCE.md for limits/protocol/consent.
+
+**[IMPLEMENTED]** go-webauthn v0.18.2 verifies real platform credential registration and
+signed attendance assertions with user verification required. Registration rechecks the
+account password. Ceremonies bind a login session, student/session/nonce, exact origin/RP,
+signature, UV/presence and counters; proofs expire in two minutes and are consumed once
+inside the attendance transaction. Student revocation and administrator password/reason
+recovery are audited. Session identity requirements persist in PostgreSQL and cannot be
+disabled by a client or configuration downgrade. No fingerprints, faces or private keys
+are stored. The OS may use PIN and synced passkeys; supervised institutional enrollment
+remains required for a stronger student-identity assurance claim.
+
+**[VERIFIED]** All Go tests pass with isolated PostgreSQL schemas, including real synthetic
+P-256 WebAuthn registration/assertions, authorization, cryptographic tampering, expiry,
+replay, counter checks, proof/attendance atomicity and full migration up/down/reapply.
+32 Node audio/engine/controller tests pass; seven sensor helper cases and Go-encoder-to-jsQR
+interoperability pass. The former HTML workflow test was updated for the new controls.
+
+**[LIMITS]** Real Android Chrome audio, QR camera, GPS and fingerprint/face/PIN testing
+is pending. Near-ultrasonic compatibility/audibility is unvalidated; synthetic ±0.3%
+clock drift passes, ±1% near-mode shift fails closed. Room calibration is not a classroom
+boundary classifier. Challenges may be copied/relayed. BLE requires a compatible real
+GATT peripheral or native peripheral app; a browser cannot broadcast from the lecturer's
+phone, and no additional hardware is assumed. No automatic physical presence approval.
+
+**[LOCAL HTTPS]** cmd/cabv-devcert creates a P-256 development CA/server certificate;
+compose.https.yaml enables trusted-HTTPS configuration and mandatory phone confirmation.
+The current laptop IP is 10.218.25.223. Device trust of the public CA certificate is a
+manual user step; private keys must stay local. Public hosting and production credentials,
+backup/restore drills and pilot load/fairness/appeal policies remain outstanding.
+docs/PHONE_HTTPS_TEST.md contains the Android Chrome test checklist. No supported browser
+was available through the enabled UI tool, so browser-engine visual QA is not claimed.
+
+**[LIVE CHECKPOINT, 2026-10-15]** cabv:phase2a built and running with PostgreSQL
+and migration version 6. app is healthy at localhost:8080; app-https is healthy on
+port 8443 with mandatory identity and secure cookies. Docker refused the specific
+Wi-Fi binding despite the address being present, so the internal HTTP endpoint was
+restored to loopback and the HTTPS listener uses 0.0.0.0. The ignored .env records
+APP_BIND_ADDRESS=127.0.0.1, HTTPS_BIND_ADDRESS=0.0.0.0 and the certificate DNS hostname.
+Strict HTTPS HTTP smoke checked the CA chain and DNS hostname without certificate
+bypass, then verified secure login, active-challenge privacy, real QR decode,
+persistent identity requirement and rejection without proof. Simulated sessions were
+closed and clients logged out; real demo accounts have no fake passkey registrations.
+Reports are .local/phase2-http-smoke.json and .local/phase2-https-smoke.json. The
+exported package is bin/cabv-phase2a.tar with adjacent SHA-256 checksum, containing
+code and migration files rather than database/uploads/development TLS private keys.
 
 ## 3. Backend choice: Go vs Rust vs Python
 

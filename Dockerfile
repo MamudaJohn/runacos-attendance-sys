@@ -15,7 +15,7 @@ WORKDIR /app
 RUN mkdir -p /app/resources && chown cabv:cabv /app/resources && chmod 700 /app/resources
 COPY --from=build /out/ /usr/local/bin/
 COPY migrations/*.sql ./migrations/
-USER cabv
+USER root
 ENV HTTP_ADDR=0.0.0.0:8080
 EXPOSE 8080
 CMD ["cabv-server"]

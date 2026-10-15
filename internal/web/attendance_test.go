@@ -324,7 +324,7 @@ func TestAttendanceHTMLWorkflow(t *testing.T) {
 		t.Fatal("HTML open")
 	}
 	w = post(teacherToken, path+"/challenge", url.Values{})
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "Prototype challenge") || !strings.Contains(w.Body.String(), "WAT") {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "challenge-qr") || !strings.Contains(w.Body.String(), "WAT") {
 		t.Fatalf("challengepage: %d %s", w.Code, w.Body.String())
 	}
 	challenge, err := database.IssueAttendanceChallenge(ctx, store.User{ID: teacherID}, id)
@@ -332,7 +332,7 @@ func TestAttendanceHTMLWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	w = post(studentToken, path+"/nonce", url.Values{})
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "Submit for review") || strings.Contains(w.Body.String(), challenge.Token) {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "Submit for lecturer review") || strings.Contains(w.Body.String(), challenge.Token) {
 		t.Fatalf("noncepage: %d %s", w.Code, w.Body.String())
 	}
 	marker := `name="nonce" value="`
@@ -343,7 +343,7 @@ func TestAttendanceHTMLWorkflow(t *testing.T) {
 	nonce := w.Body.String()[start+len(marker):]
 	nonce = strings.SplitN(nonce, `"`, 2)[0]
 	w = post(studentToken, path+"/verify", url.Values{"token": {challenge.Token}, "nonce": {nonce}})
-	if w.Code != 200 || !bytes.Contains(w.Body.Bytes(), []byte("Your request is pending lecturer review.")) {
+	if w.Code != 200 || !bytes.Contains(w.Body.Bytes(), []byte("Pending lecturer review")) {
 		t.Fatalf("pendingpage: %d %s", w.Code, w.Body.String())
 	}
 	w = post(teacherToken, path+"/reviews", url.Values{"email": {"student@html.test"}, "decision": {"present"}, "reason": {"Reviewed in person"}})

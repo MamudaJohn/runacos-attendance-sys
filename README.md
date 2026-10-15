@@ -1,8 +1,11 @@
 # CABV Attendance System
 
-Phase 1C: classroom administration, private resources, attendance sessions, short-lived
-challenges, student check-ins, and audited lecturer review on the Go/PostgreSQL foundation.
-Acoustic transmission/decoding and physical-presence validation are **planned**.
+Phase 2A experimental: Go/PostgreSQL classroom workflows now include browser acoustic
+transmission/reception, QR scanning, optional GPS, room reference comparisons, a BLE
+GATT client, and WebAuthn phone confirmation. Physical classroom presence and resistance
+to relaying remain unvalidated; accepted check-ins still await lecturer review.
+
+For the lecturer laptop / Android Chrome test, follow [the HTTPS test guide](docs/PHONE_HTTPS_TEST.md).
 
 ## Docker package
 
@@ -14,8 +17,8 @@ docker compose up -d --build --wait
 
 Open http://127.0.0.1:8080. Compose waits for PostgreSQL, runs the versioned
 migration command, then starts the non-root server container and checks readiness.
-The `cabv:phase1c` image contains server, migration, and explicit demo-seed binaries plus SQL files;
-the templates and CSS are embedded. Build tools and local files are excluded.
+The `cabv:phase2a` image contains server, migration, and explicit demo-seed binaries plus SQL files;
+the templates, CSS and JavaScript are embedded. Build tools and local files are excluded.
 PostgreSQL is exposed on loopback port 55433 to avoid conflicting with an existing
 local database. Set `DB_PORT` to override the host port. The current image is linux/amd64.
 
@@ -31,7 +34,7 @@ named volumes (`postgres_data` and `resource_data`). Back up and restore both to
 The image export contains application code; it does not contain uploaded files or
 database records. These are local
 development settings; public hosting, HTTPS, backups and production credentials
-remain future work. Load the exported image with `docker load -i bin/cabv-phase1c.tar`;
+remain future work. Local trusted HTTPS tooling is available. Load the exported image with `docker load -i bin/cabv-phase2a.tar`;
 use `docker compose up -d --wait` afterward without `--build`.
 
 ## Lecturer laptop and student phone test
@@ -132,8 +135,8 @@ production administrator bootstrap remain planned.
 ## Attendance prototype
 
 The reviewed threat model and API contract are in [docs/attendance-contract.md](docs/attendance-contract.md).
-This milestone tests token possession and lecturer review. It does not decode audio
-or prove classroom presence. A copied or relayed challenge can still be submitted;
+This milestone decodes acoustic challenges and supports QR, optional sensor measurements
+and phone authenticator signatures. A copied or relayed challenge can still be submitted;
 successful token validation creates **pending** attendance, never automatic approval.
 
 To try the browser workflow at http://127.0.0.1:8080:
@@ -144,8 +147,10 @@ To try the browser workflow at http://127.0.0.1:8080:
    issuing another challenge revokes the previous value. It lasts 90 seconds or until
    the session ends. Reloading the page does not recover the plaintext token.
 3. In a separate browser/profile, sign in as `student@cabv.test`, open that session,
-   and select **Start check-in**. Enter the lecturer's challenge and submit. This
-   manual-entry screen is for the prototype; audio decoding is not implemented.
+   receive the challenge by sound or QR on trusted HTTPS, or use manual entry for
+   HTTP development. Choose whether to include GPS/room measurements and submit.
+   When identity is configured, register a phone authenticator with your password
+   and confirm each submission using the device's fingerprint, face or PIN prompt.
 4. The student gets **Pending lecturer review**. As the lecturer, review the student,
    choose present/rejected, and give a reason. The outcome is explicitly attributed
    to manual review; existing attempts and prior reviews remain intact.
@@ -206,7 +211,13 @@ trusted proxy and pilot traffic policies need review before public hosting.
 - [x] Transactional audit events for catalog changes and resource uploads.
 - [x] Attendance session lifecycle, challenge/nonce checks, duplicate prevention and audited lecturer decisions.
 - [x] Attendance permission, expiry, replay, concurrency and rollback tests.
-- [ ] Acoustic transmitter/decoder and real-phone measurements.
+- [x] Audible and experimental near-ultrasonic transmitter/streaming decoder with synthetic audio tests.
+- [x] Lecturer attendance QR and camera scanning with a locally bundled fallback decoder.
+- [x] Optional GPS and audible room-probe reference comparisons for review.
+- [x] Browser BLE GATT receiver and documented peripheral protocol (real hardware not tested).
+- [x] Signed WebAuthn phone confirmation, required user verification, revocation and audited recovery.
+- [x] Local HTTPS certificate tool and Compose HTTPS configuration.
+- [ ] Real-phone audio/biometric tests, BLE peripheral integration and classroom boundary/relay trials.
 - [ ] PWA caching, HTTPS hosting, backups and pilot deployment.
 
 The portal supports classroom administration, resources, pending check-ins and manual
@@ -296,10 +307,13 @@ directory. No frontend framework or JavaScript is needed for this milestone.
 HTTP timeouts, bounded headers, database connection timeouts and graceful shutdown
 provide a small operational foundation. Database connection errors are not returned
 to clients. The database holds account/enrollment data, token digests and attributed
-attendance decisions; private course files are separate. No acoustic measurements exist.
+attendance decisions; private course files are separate. Optional spectral measurements
+and GPS observations are untrusted supporting evidence. Raw audio and biometric samples
+never reach the server. Observation data expires after seven days and is sanitized at
+startup and hourly; audit references are retained. Room reference data lasts until replaced.
 
 Administrator-created accounts and enrollment management are implemented. Roster
 import, password recovery and institutional identity policies remain planned.
-Device/browser mix remains unknown; no browser/audio compatibility claim is made.
-Acoustic challenge threat model and API contracts require review before verification
-implementation. Presence detection and relay resistance remain experimental.
+The first requested physical test device is Android with Chrome; other devices remain
+uncharacterized. The acoustic challenge threat model and API contracts have been reviewed.
+Physical device compatibility, presence detection and relay resistance need field trials.

@@ -57,16 +57,32 @@ func TestMigrationRoundTrip(t *testing.T) {
 			t.Fatalf("repeat up: %v", err)
 		}
 		var phase string
-		if err := db.QueryRowContext(ctx, "SELECT value FROM app_metadata WHERE key = 'schema_phase'").Scan(&phase); err != nil || phase != "1c" {
+		if err := db.QueryRowContext(ctx, "SELECT value FROM app_metadata WHERE key = 'schema_phase'").Scan(&phase); err != nil || phase != "2a-experimental" {
 			t.Fatalf("phase=%q error=%v", phase, err)
 		}
-		for _, table := range []string{"app_metadata", "users", "sessions", "courses", "course_lecturers", "enrollments", "rooms", "resources", "audit_events", "attendance_sessions", "acoustic_challenges", "submission_nonces", "verification_attempts", "attendance_records", "attendance_reviews"} {
+		for _, table := range []string{"app_metadata", "users", "sessions", "courses", "course_lecturers", "enrollments", "rooms", "resources", "audit_events", "attendance_sessions", "acoustic_challenges", "submission_nonces", "verification_attempts", "attendance_records", "attendance_reviews", "identity_credentials", "identity_ceremonies", "identity_proofs", "room_calibrations", "attendance_evidence"} {
 			var found sql.NullString
 			if err := db.QueryRowContext(ctx, "SELECT to_regclass($1)::text", schema+"."+table).Scan(&found); err != nil || !found.Valid {
 				t.Fatalf("expected table %s: %v error=%v", table, found, err)
 			}
 		}
-		// Down once rolls back attendance while preserving resources and accounts.
+		// Remove optional sensor evidence and identity first, preserving attendance.
+		if err := goose.DownContext(ctx, db, "."); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRowContext(ctx, "SELECT value FROM app_metadata WHERE key = 'schema_phase'").Scan(&phase); err != nil || phase != "1c" {
+			t.Fatalf("sensor rollback phase=%q error=%v", phase, err)
+		}
+		if err := goose.DownContext(ctx, db, "."); err != nil {
+			t.Fatal(err)
+		}
+		for _, table := range []string{"identity_credentials", "identity_ceremonies", "identity_proofs", "room_calibrations", "attendance_evidence"} {
+			var found sql.NullString
+			if err := db.QueryRowContext(ctx, "SELECT to_regclass($1)::text", schema+"."+table).Scan(&found); err != nil || found.Valid {
+				t.Fatalf("sensor/identity rollback left %s error=%v", table, err)
+			}
+		}
+		// Attendance rollback preserves resources and accounts.
 		if err := goose.DownContext(ctx, db, "."); err != nil {
 			t.Fatal(err)
 		}

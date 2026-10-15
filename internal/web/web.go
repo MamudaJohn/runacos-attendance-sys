@@ -11,6 +11,7 @@ import (
 	_ "time/tzdata"
 
 	"cabv/internal/auth"
+	"cabv/internal/identity"
 	"cabv/internal/resources"
 	"cabv/internal/store"
 )
@@ -22,6 +23,7 @@ type Options struct {
 	Store         *store.Store
 	SecureCookies bool
 	Files         *resources.Storage
+	Identity      *identity.Service
 }
 
 type application struct {
@@ -101,6 +103,10 @@ func Handler(ping func(context.Context) error, options ...Options) http.Handler 
 	mux.HandleFunc("POST /api/v1/attendance/sessions/{id}/nonce", a.issueNonce)
 	mux.HandleFunc("POST /api/v1/attendance/sessions/{id}/verify", a.verifyAttendance)
 	mux.HandleFunc("POST /api/v1/attendance/sessions/{id}/reviews", a.reviewAttendance)
+	a.registerIdentityRoutes(mux)
+	mux.HandleFunc("POST /api/v1/attendance/sessions/{id}/evidence", a.recordEvidence)
+	mux.HandleFunc("GET /api/v1/attendance/sessions/{id}/evidence", a.attendanceEvidence)
+	mux.HandleFunc("POST /api/v1/attendance/sessions/{id}/calibration", a.calibrateRoom)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { status(w, http.StatusOK, "ok") })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +120,8 @@ func Handler(ping func(context.Context) error, options ...Options) http.Handler 
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		w.Header().Set("Permissions-Policy", "camera=(self), microphone=(self), geolocation=(self), bluetooth=(self), publickey-credentials-create=(self), publickey-credentials-get=(self)")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("Cache-Control", "no-store")
 		timeout := 5 * time.Second

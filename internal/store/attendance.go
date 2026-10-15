@@ -22,6 +22,7 @@ type AttendanceSession struct {
 	ID, CourseID, RoomID, RoomName, Title, Status, PolicyVersion string
 	StartsAt, EndsAt                                             time.Time
 	DurationMinutes                                              int
+	IdentityRequired                                             bool
 }
 
 type AttendanceResult struct {
@@ -32,13 +33,13 @@ type AttendanceResult struct {
 }
 
 const attendanceSessionColumns = `a.id::text, a.course_id::text, a.room_id::text, r.name,
-	a.title, a.status, a.policy_version, a.starts_at, a.ends_at, a.duration_minutes`
+	a.title, a.status, a.policy_version, a.starts_at, a.ends_at, a.duration_minutes, a.identity_required`
 
 func scanAttendanceSession(row pgx.Row) (AttendanceSession, error) {
 	var session AttendanceSession
 	var start, end *time.Time
 	err := row.Scan(&session.ID, &session.CourseID, &session.RoomID, &session.RoomName,
-		&session.Title, &session.Status, &session.PolicyVersion, &start, &end, &session.DurationMinutes)
+		&session.Title, &session.Status, &session.PolicyVersion, &start, &end, &session.DurationMinutes, &session.IdentityRequired)
 	if start != nil {
 		session.StartsAt = *start
 	}
@@ -120,7 +121,7 @@ func lockAttendanceStudent(ctx context.Context, tx pgx.Tx, actor User, sessionID
 	return lockAttendanceSession(ctx, tx, actor, sessionID, true)
 }
 
-func (s *Store) CreateAttendanceSession(ctx context.Context, actor User, courseID, roomID, title string, durationMinutes int) (AttendanceSession, error) {
+func (s *Store) CreateAttendanceSession(ctx context.Context, actor User, courseID, roomID, title string, durationMinutes int, requireIdentity ...bool) (AttendanceSession, error) {
 	title = strings.TrimSpace(title)
 	if title == "" || len(title) > 200 || !utf8.ValidString(title) || durationMinutes < 1 || durationMinutes > 180 {
 		return AttendanceSession{}, ErrAttendanceInvalid
@@ -155,8 +156,9 @@ func (s *Store) CreateAttendanceSession(ctx context.Context, actor User, courseI
 	}
 	session := AttendanceSession{CourseID: courseID, RoomID: roomID, RoomName: roomName,
 		Title: title, Status: "draft", PolicyVersion: AttendancePolicyVersion, DurationMinutes: durationMinutes}
-	if err := tx.QueryRow(ctx, `INSERT INTO attendance_sessions(course_id,room_id,opened_by,title,duration_minutes)
-		VALUES($1,$2,$3,$4,$5) RETURNING id::text`, course, room, actor.ID, title, durationMinutes).Scan(&session.ID); err != nil {
+	session.IdentityRequired = len(requireIdentity) > 0 && requireIdentity[0]
+	if err := tx.QueryRow(ctx, `INSERT INTO attendance_sessions(course_id,room_id,opened_by,title,duration_minutes,identity_required)
+		VALUES($1,$2,$3,$4,$5,$6) RETURNING id::text`, course, room, actor.ID, title, durationMinutes, session.IdentityRequired).Scan(&session.ID); err != nil {
 		return AttendanceSession{}, err
 	}
 	if err := auditMutation(ctx, tx, actor.ID, "attendance.session_created", "attendance_session", session.ID,
@@ -169,7 +171,7 @@ func (s *Store) CreateAttendanceSession(ctx context.Context, actor User, courseI
 	return session, nil
 }
 
-func (s *Store) OpenAttendanceSession(ctx context.Context, actor User, sessionID string) error {
+func (s *Store) OpenAttendanceSession(ctx context.Context, actor User, sessionID string, requireIdentity ...bool) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -184,8 +186,9 @@ func (s *Store) OpenAttendanceSession(ctx context.Context, actor User, sessionID
 	}
 	if _, err := tx.Exec(ctx, `WITH wallclock AS (SELECT clock_timestamp() AS t)
 		UPDATE attendance_sessions SET status='open', starts_at=wallclock.t,
-		ends_at=wallclock.t + duration_minutes * interval '1 minute', updated_at=wallclock.t
-		FROM wallclock WHERE id=$1`, session.ID); err != nil {
+		ends_at=wallclock.t + duration_minutes * interval '1 minute', updated_at=wallclock.t,
+		identity_required=identity_required OR $2
+		FROM wallclock WHERE id=$1`, session.ID, len(requireIdentity) > 0 && requireIdentity[0]); err != nil {
 		return err
 	}
 	if err := auditMutation(ctx, tx, actor.ID, "attendance.session_opened", "attendance_session", session.ID, nil); err != nil {
@@ -227,7 +230,7 @@ func (s *Store) CloseAttendanceSession(ctx context.Context, actor User, sessionI
 // Expiry is derived from PostgreSQL's wall clock; it never reopens a session.
 const attendanceReadColumns = `a.id::text, a.course_id::text, a.room_id::text, r.name, a.title,
 	CASE WHEN a.status='open' AND a.ends_at <= clock_timestamp() THEN 'expired' ELSE a.status END,
-	a.policy_version, a.starts_at, a.ends_at, a.duration_minutes`
+	a.policy_version, a.starts_at, a.ends_at, a.duration_minutes, a.identity_required`
 
 func (s *Store) ListAttendanceSessions(ctx context.Context, user User, courseID string) ([]AttendanceSession, error) {
 	if _, err := s.Course(ctx, user, courseID); err != nil {

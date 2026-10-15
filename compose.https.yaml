@@ -1,0 +1,40 @@
+# Optional local HTTPS endpoint, alongside the existing HTTP development app.
+# Generate .local/tls first and trust ONLY root-ca.crt on your test devices.
+services:
+  app:
+    # Require the same proof even on the internal HTTP endpoint; it cannot
+    # bypass the HTTPS service's identity policy against the shared database.
+    environment:
+      COOKIE_SECURE: "true"
+      PUBLIC_ORIGIN: "https://${LOCAL_HTTPS_HOST:?Set LOCAL_HTTPS_HOST}:8443"
+      WEBAUTHN_RP_ID: "${LOCAL_HTTPS_HOST:?Set LOCAL_HTTPS_HOST}"
+  app-https:
+    image: cabv:phase2a
+    build: .
+    environment:
+      HTTP_ADDR: 0.0.0.0:8443
+      COOKIE_SECURE: "true"
+      DATABASE_URL: postgres://cabv:cabv_dev_only@db:5432/cabv?sslmode=disable
+      RESOURCE_DIR: /app/resources
+      RESOURCE_QUOTA_BYTES: "104857600"
+      PUBLIC_ORIGIN: "https://${LOCAL_HTTPS_HOST:?Set LOCAL_HTTPS_HOST to the certificate DNS hostname}:8443"
+      WEBAUTHN_RP_ID: "${LOCAL_HTTPS_HOST:?Set LOCAL_HTTPS_HOST}"
+      TLS_CERT_FILE: /app/tls/server.crt
+      TLS_KEY_FILE: /app/tls/server.key
+    ports:
+      - "${HTTPS_BIND_ADDRESS:-127.0.0.1}:8443:8443"
+    volumes:
+      - resource_data:/app/resources
+      - ./.local/tls/server.crt:/app/tls/server.crt:ro
+      - ./.local/tls/server.key:/app/tls/server.key:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # Only this loopback health probe skips certificate validation. User
+      # browsers and verification tests must trust the generated CA normally.
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "/dev/null", "https://127.0.0.1:8443/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped

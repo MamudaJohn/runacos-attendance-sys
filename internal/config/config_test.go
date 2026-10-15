@@ -2,6 +2,35 @@ package config
 
 import "testing"
 
+func TestPhoneIdentityConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name, rp, origin, secure, cert, key string
+		valid                               bool
+	}{
+		{"disabled", "", "", "false", "", "", true},
+		{"https", "attendance.test", "https://attendance.test:8443", "true", "cert.pem", "key.pem", true},
+		{"localhost", "localhost", "http://localhost:8080", "false", "", "", true},
+		{"missing RP", "", "https://attendance.test", "true", "", "", false},
+		{"missing origin", "attendance.test", "", "true", "", "", false},
+		{"insecure phone", "attendance.test", "http://attendance.test", "false", "", "", false},
+		{"wrong hostname", "other.test", "https://attendance.test", "true", "", "", false},
+		{"IP RP", "10.0.0.1", "https://10.0.0.1", "true", "", "", false},
+		{"insecure cookies", "attendance.test", "https://attendance.test", "false", "", "", false},
+		{"path", "attendance.test", "https://attendance.test/login", "true", "", "", false},
+		{"credentials", "attendance.test", "https://user@attendance.test", "true", "", "", false},
+		{"query", "attendance.test", "https://attendance.test?q=x", "true", "", "", false},
+		{"incomplete TLS", "", "", "true", "cert.pem", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			values := map[string]string{"DATABASE_URL": "postgres://localhost/cabv", "WEBAUTHN_RP_ID": tc.rp, "PUBLIC_ORIGIN": tc.origin, "COOKIE_SECURE": tc.secure, "TLS_CERT_FILE": tc.cert, "TLS_KEY_FILE": tc.key}
+			_, err := Parse(func(k string) string { return values[k] })
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v error=%v", tc.valid, err)
+			}
+		})
+	}
+}
+
 func TestParse(t *testing.T) {
 	for _, tc := range []struct {
 		name, addr, db string

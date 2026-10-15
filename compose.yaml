@@ -1,6 +1,6 @@
 services:
   app:
-    image: cabv:phase1c
+    image: cabv:phase2a
     build: .
     environment:
       HTTP_ADDR: 0.0.0.0:8080
@@ -22,7 +22,7 @@ services:
       retries: 10
     restart: unless-stopped
   migrate:
-    image: cabv:phase1c
+    image: cabv:phase2a
     build: .
     command: ["cabv-migrate", "up"]
     environment:

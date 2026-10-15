@@ -65,7 +65,7 @@ func attendanceExpiry(now, end time.Time, ttl time.Duration) time.Time {
 // IssueAttendanceChallenge rotates the existing challenge under the same row
 // lock used by verification and closure. Neither the database nor audit stores
 // its plaintext, so it cannot be retrieved later; the lecturer can rotate again.
-func (s *Store) IssueAttendanceChallenge(ctx context.Context, actor User, sessionID string) (AttendanceChallenge, error) {
+func (s *Store) IssueAttendanceChallenge(ctx context.Context, actor User, sessionID string, requireIdentity ...bool) (AttendanceChallenge, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return AttendanceChallenge{}, err
@@ -81,6 +81,11 @@ func (s *Store) IssueAttendanceChallenge(ctx context.Context, actor User, sessio
 	}
 	if attendanceWindowReason(session, now) != "" {
 		return AttendanceChallenge{}, ErrAttendanceState
+	}
+	if len(requireIdentity) > 0 && requireIdentity[0] {
+		if _, err := tx.Exec(ctx, `UPDATE attendance_sessions SET identity_required=true WHERE id=$1`, session.ID); err != nil {
+			return AttendanceChallenge{}, err
+		}
 	}
 	var generation int
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(generation), 0) + 1 FROM acoustic_challenges WHERE session_id=$1`, session.ID).Scan(&generation); err != nil {
@@ -164,6 +169,21 @@ func (s *Store) Nonce(ctx context.Context, student User, sessionID string) (Atte
 // The session lock serializes closure, rotation, limits, and duplicate handling.
 // Failed attempts never replace an existing attendance or manual review.
 func (s *Store) VerifyAttendance(ctx context.Context, student User, sessionID, token, nonce string) (AttendanceDecision, error) {
+	return s.VerifyAttendanceWithEvidence(ctx, student, sessionID, token, nonce, AttendanceSubmission{})
+}
+
+// AttendanceSubmission carries opaque, server-owned evidence references. Only
+// the server sets RequireIdentity; no request field can disable verification.
+type AttendanceSubmission struct {
+	CaptureMethod, EvidenceID, IdentityProofID string
+	ExpectedRPID                               string
+	RequireIdentity                            bool
+}
+
+func (s *Store) VerifyAttendanceWithEvidence(ctx context.Context, student User, sessionID, token, nonce string, input AttendanceSubmission) (AttendanceDecision, error) {
+	if input.CaptureMethod == "" {
+		input.CaptureMethod = "manual"
+	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return AttendanceDecision{}, err
@@ -241,6 +261,34 @@ func (s *Store) VerifyAttendance(ctx context.Context, student User, sessionID, t
 		}
 	}
 
+	var evidenceID, proofID any
+	if reason == "" {
+		if err := s.LinkAttendanceEvidenceTx(ctx, tx, student.ID, session.ID, input.EvidenceID, input.CaptureMethod); err != nil {
+			if !errors.Is(err, ErrAttendanceInvalid) {
+				return AttendanceDecision{}, err
+			}
+			reason = "evidence_invalid"
+		} else if input.EvidenceID != "" {
+			evidenceID = input.EvidenceID
+		}
+	}
+	if reason == "" && (input.RequireIdentity || session.IdentityRequired || input.IdentityProofID != "") {
+		if input.IdentityProofID == "" {
+			reason = "identity_required"
+		} else if err := s.ConsumeIdentityProofForRPTx(ctx, tx, student.ID, session.ID, auth.HashToken(nonce), input.IdentityProofID, input.ExpectedRPID); err != nil {
+			if !errors.Is(err, ErrIdentityRejected) {
+				return AttendanceDecision{}, err
+			}
+			reason = "identity_rejected"
+		} else {
+			proofID = input.IdentityProofID
+		}
+	}
+	// Failed claims keep their audit reason but cannot link unvalidated metadata.
+	method := input.CaptureMethod
+	if evidenceID == nil {
+		method = "manual"
+	}
 	decision := AttendanceDecision{Status: "rejected", ReasonCode: reason}
 	attemptDecision := "rejected"
 	if reason == "" {
@@ -261,8 +309,8 @@ func (s *Store) VerifyAttendance(ctx context.Context, student User, sessionID, t
 		attemptReason = "duplicate"
 	}
 	var attemptID string
-	if err := tx.QueryRow(ctx, `INSERT INTO verification_attempts(session_id,student_id,challenge_id,decision,reason_code,policy_version,created_at)
-		VALUES($1,$2,$3,$4,$5,$6,clock_timestamp()) RETURNING id::text`, session.ID, student.ID, challengeID, attemptDecision, attemptReason, session.PolicyVersion).
+	if err := tx.QueryRow(ctx, `INSERT INTO verification_attempts(session_id,student_id,challenge_id,decision,reason_code,policy_version,capture_method,evidence_id,identity_proof_id,created_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,clock_timestamp()) RETURNING id::text`, session.ID, student.ID, challengeID, attemptDecision, attemptReason, session.PolicyVersion, method, evidenceID, proofID).
 		Scan(&attemptID); err != nil {
 		return AttendanceDecision{}, err
 	}
@@ -273,7 +321,7 @@ func (s *Store) VerifyAttendance(ctx context.Context, student User, sessionID, t
 		}
 	}
 	if err := auditMutation(ctx, tx, student.ID, "attendance.verify", "attendance_session", session.ID,
-		map[string]any{"attempt_id": attemptID, "decision": attemptDecision, "reason_code": attemptReason, "policy_version": session.PolicyVersion}); err != nil {
+		map[string]any{"attempt_id": attemptID, "decision": attemptDecision, "reason_code": attemptReason, "policy_version": session.PolicyVersion, "capture_method": method, "identity_confirmed": proofID != nil}); err != nil {
 		return AttendanceDecision{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

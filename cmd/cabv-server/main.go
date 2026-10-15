@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"cabv/internal/config"
+	"cabv/internal/identity"
 	"cabv/internal/resources"
 	"cabv/internal/store"
 	"cabv/internal/web"
@@ -46,9 +47,40 @@ func run() error {
 	if err != nil {
 		return errors.New("cannot initialize private resource storage")
 	}
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: web.Handler(pool.Ping, web.Options{Store: &store.Store{Pool: pool}, SecureCookies: cfg.SecureCookies, Files: files}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+	database := &store.Store{Pool: pool}
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			maintenance, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if _, err := database.PruneAttendanceEvidence(maintenance); err != nil && ctx.Err() == nil {
+				slog.Warn("cannot expire sensor observations", "error", err)
+			}
+			cancel()
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	var phoneIdentity *identity.Service
+	if cfg.PublicOrigin != "" {
+		phoneIdentity, err = identity.New(database, cfg.WebAuthnRPID, cfg.PublicOrigin)
+		if err != nil {
+			return err
+		}
+	}
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: web.Handler(pool.Ping, web.Options{Store: database, SecureCookies: cfg.SecureCookies, Files: files, Identity: phoneIdentity}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	done := make(chan error, 1)
-	go func() { slog.Info("server listening", "address", cfg.HTTPAddr); done <- server.ListenAndServe() }()
+	go func() {
+		slog.Info("server listening", "address", cfg.HTTPAddr, "tls", cfg.TLSCertFile != "", "identity_required", phoneIdentity != nil)
+		if cfg.TLSCertFile != "" {
+			done <- server.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			done <- server.ListenAndServe()
+		}
+	}()
 	select {
 	case err := <-done:
 		return err

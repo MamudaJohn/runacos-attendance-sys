@@ -1,7 +1,7 @@
-# Attendance prototype contract — Phase 1C
+# Attendance contract — experimental audio and phone identity
 
-This contract describes the attendance workflow being implemented. Acoustic transmission
-and decoding are separate, unimplemented work. A valid token demonstrates possession of
+This contract describes the implemented attendance workflow, extended by the experimental
+acoustic, QR, sensor and WebAuthn milestone. A valid token demonstrates possession of
 a challenge; it does not establish that a student is inside a classroom. Real-time sharing
 and audio relay remain possible. No automatic outcome is called verified physical presence.
 
@@ -27,7 +27,8 @@ Challenge issuance is an explicit manager-only POST. It generates a cryptographi
 random 256-bit token, revokes earlier challenges, and returns plaintext once to that
 manager. The database stores only its SHA-256 digest. Tokens expire after 90 seconds or
 session end, whichever comes first. There is no GET that retrieves an existing token.
-Prototype testing uses manual entry on the student form; no browser-audio claim is made.
+Browser audio and QR can acquire this token. BLE can receive the same session-scoped
+payload from a compatible external GATT peripheral; browsers cannot advertise it.
 
 A student obtains a separate 256-bit nonce bound to their identity and session. It expires
 after two minutes or session end. Only a digest is stored. Issuing a new nonce invalidates
@@ -41,6 +42,31 @@ expired/revoked challenge, closed/expired session, or invalid nonce is rejected 
 reason code. Authorized attempts and audit events are transactional and contain no
 plaintext token or nonce. Once the attempt cap is reached, further calls cannot grow
 attempt/audit history indefinitely.
+
+When `PUBLIC_ORIGIN` and `WEBAUTHN_RP_ID` are configured, every submission requires
+a signed WebAuthn assertion with required user verification. Creating, opening or
+issuing a challenge through that configuration permanently sets the session's
+`identity_required` flag; later configuration changes or older clients cannot disable
+it. The exact expected origin, RP, challenge, credential owner, signature, presence,
+UV flag and counter are verified with go-webauthn. Registration requires password
+re-entry. One-use ceremonies expire after five minutes and bind the browser login
+session; attendance assertions additionally bind the student/session/nonce. Two-minute
+one-use proof IDs are consumed in the same transaction as attendance and must match
+the current RP. Revocation invalidates outstanding proofs. Students can revoke their
+credentials; administrator reset requires a password and an audited reason.
+
+User verification may use fingerprint, face or a device PIN. No biometric samples
+or authenticator private keys are collected. Credential enrollment after password
+confirmation establishes an enrolled key holder, not institutionally verified identity
+or ownership of a particular handset; passkeys may be synced. Supervised enrollment
+and recovery are still institutional policy decisions.
+
+Optional evidence IDs must belong to the student, session and capture method, be
+less than two minutes old and have never been linked to an attempt. A capture method
+is a browser claim, not a server-attested sensor. Spectral/GPS comparisons are shadow
+measurements without an inside/outside decision and never mark attendance present.
+Optional observation data expires after seven days and is sanitized at startup/hourly;
+comparison/audit references remain. Calibration references persist until replaced.
 
 An accepted challenge creates a single `pending` record with reason `pending_review`.
 Initial rejected attempts remain in attempt history and do not create approved attendance.
@@ -63,6 +89,13 @@ JSON API mutations require cookie authentication, same-origin browser metadata,
 `Content-Type: application/json`, `X-CSRF-Token` bound to the login session, a body under
 4 KiB, and only the documented fields. Form mutations use the existing 8 KiB form cap
 and hidden CSRF token. Responses are private/no-store. Tokens never appear in URLs.
+
+Verify accepts `token`, `nonce`, optional `capture_method`, `evidence_id`, and
+`identity_proof_id`; identity enforcement is server/database policy. No client policy
+flag is accepted. Missing/invalid identity gives `identity_required`/`identity_rejected`;
+foreign, stale or reused evidence gives `evidence_invalid`, preserving prior records.
+Identity ceremony bodies have a 20 KiB envelope cap and a 16 KiB credential cap.
+The sensor endpoints and GATT protocol are described in [SENSOR_EVIDENCE.md](SENSOR_EVIDENCE.md).
 
 | Method/path | Fields | Access / response |
 |---|---|---|
